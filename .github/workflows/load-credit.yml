@@ -1,0 +1,113 @@
+name: Load 10bis credit
+
+on:
+  # Triggered Sunday-Thursday at 09:00 Israel time by cron-job.org
+  # through the workflow_dispatch API, because GitHub's own schedule never fired.
+  # If credit was already loaded today, the run stops after a quick check.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  # The log issue: the bot comments there with ✅ / ❌ and the Israel date.
+  # It is created on the first run if the repository does not have it yet.
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      issue: ${{ steps.check.outputs.issue }}
+      loaded: ${{ steps.check.outputs.loaded }}
+      failed: ${{ steps.check.outputs.failed }}
+
+    steps:
+      - name: Check today's results in the log issue
+        id: check
+        run: |
+          TITLE="יומן טעינות קרדיט"
+
+          ISSUE=$(gh api "repos/$GH_REPO/issues?state=all&per_page=100" \
+            --jq "map(select(.title == \"$TITLE\" and (.pull_request | not))) | .[0].number // empty")
+
+          if [ -z "$ISSUE" ]; then
+            URL=$(gh issue create --title "$TITLE" \
+              --body "כאן נרשמת כל טעינת קרדיט, עם תיוג שמייצר מייל עדכון.")
+            ISSUE=$(basename "$URL")
+          fi
+
+          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+
+          TODAY=$(TZ=Asia/Jerusalem date '+%d/%m/%Y')
+          SINCE=$(date -u -d '-2 days' '+%Y-%m-%dT%H:%M:%SZ')
+
+          gh api "repos/$GH_REPO/issues/$ISSUE/comments?per_page=100&since=$SINCE" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .body' > comments.txt
+
+          if grep -q "✅.*$TODAY" comments.txt; then
+            echo "Credit was already loaded today - nothing to do."
+            echo "loaded=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if grep -q "❌.*$TODAY" comments.txt; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+
+  load-credit:
+    needs: check
+    if: needs.check.outputs.loaded != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build -c Release
+
+      - name: Install Chromium
+        run: pwsh bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+
+      - name: Write saved session
+        run: echo "$TENBIS_STATE" > "$RUNNER_TEMP/tenbis-state.json"
+        env:
+          TENBIS_STATE: ${{ secrets.TENBIS_STATE }}
+
+      # A failure here does not fail the run, so hourly retries do not send
+      # an email every hour. The failure is reported once a day below.
+      - name: Load credit
+        id: load
+        continue-on-error: true
+        run: dotnet run -c Release --no-build
+        env:
+          TENBIS_STATE_PATH: ${{ runner.temp }}/tenbis-state.json
+
+      # Mentioning the owner in the log issue makes GitHub send an email.
+      - name: Report result
+        run: |
+          LOG=bin/Release/net10.0/TenBisAutoCredit.log
+          NOW=$(TZ=Asia/Jerusalem date '+%d/%m/%Y %H:%M')
+          OWNER="@${{ github.repository_owner }}"
+          ISSUE="${{ needs.check.outputs.issue }}"
+
+          if grep -q "| SUCCESS" "$LOG" 2>/dev/null; then
+            gh issue comment "$ISSUE" --body "$OWNER ✅ נטען קרדיט ב-10bis — $NOW"
+          elif [ "${{ steps.load.outcome }}" = "failure" ]; then
+            if [ "${{ needs.check.outputs.failed }}" = "true" ]; then
+              echo "Failure was already reported today."
+            else
+              REASON=$(grep "| ERROR" "$LOG" 2>/dev/null | tail -1 | cut -d'|' -f4- | sed 's/^ *//')
+              gh issue comment "$ISSUE" --body "$OWNER ❌ טעינת הקרדיט נכשלה — $NOW
+          ${REASON:-The program failed without writing a result.}
+          פרטים: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
