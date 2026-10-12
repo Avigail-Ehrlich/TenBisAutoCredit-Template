@@ -125,12 +125,20 @@ The GitHub run takes about a minute and a half; then you should get a ✅ email 
 
 | What happened | What to do |
 |---|---|
-| ❌ email `Login was not detected` | The session expired: repeat step 2 (`dotnet run -- --login`) and step 3 |
+| ❌ email `Login was not detected` | The session expired: repeat step 2 (`dotnet run -- --login`) and step 3. This also happens if no run happened for 7 days (see below) |
 | Any other ❌ email | 10bis probably changed their site — check the log linked in the email |
 | No email at all by 09:15 | Check **History** for the job on cron-job.org and the repository's Actions tab |
 | Token about to expire | On the tokens page: **Regenerate token**, then replace it in the cron-job.org header |
 
 Manual run at any time: **Test run** on cron-job.org, or **Actions → Load 10bis credit → Run workflow** in the repository.
+
+### About the session
+
+10bis replaces the session cookies when it refreshes them and invalidates the old ones.
+So every run saves the refreshed session to the GitHub Actions cache, and the next run uses it
+instead of the original one from the `TENBIS_STATE` secret. After a new login and secret update,
+the cached session is ignored automatically. GitHub deletes caches that were not used for 7 days,
+so if the job stops running for a week you will need to log in again.
 
 ## Cost
 

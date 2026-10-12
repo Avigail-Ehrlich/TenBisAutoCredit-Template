@@ -74,19 +74,50 @@ jobs:
       - name: Install Chromium
         run: pwsh bin/Release/net10.0/playwright.ps1 install --with-deps chromium
 
-      - name: Write saved session
-        run: echo "$TENBIS_STATE" > "$RUNNER_TEMP/tenbis-state.json"
+      # 10bis invalidates the session cookies when it refreshes them, so every
+      # run saves the refreshed session to the Actions cache for the next run.
+      # The cache key includes a hash of the TENBIS_STATE secret: after a new
+      # --login and secret update, the old cached session is ignored.
+      - name: Session cache key
+        id: session
+        run: echo "prefix=tenbis-session-$(printf '%s' "$TENBIS_STATE" | sha256sum | cut -c1-16)-" >> "$GITHUB_OUTPUT"
         env:
           TENBIS_STATE: ${{ secrets.TENBIS_STATE }}
 
-      # A failure here does not fail the run, so hourly retries do not send
-      # an email every hour. The failure is reported once a day below.
+      - name: Restore refreshed session
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/session
+          key: ${{ steps.session.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ steps.session.outputs.prefix }}
+
+      - name: Write saved session
+        run: |
+          if [ -f "$RUNNER_TEMP/session/tenbis-state.json" ]; then
+            echo "Using the refreshed session from the previous run."
+          else
+            echo "Using the session from the TENBIS_STATE secret."
+            mkdir -p "$RUNNER_TEMP/session"
+            printf '%s' "$TENBIS_STATE" > "$RUNNER_TEMP/session/tenbis-state.json"
+          fi
+        env:
+          TENBIS_STATE: ${{ secrets.TENBIS_STATE }}
+
+      # A failure here does not fail the run, so a failed day sends only one
+      # email. The failure is reported once a day below.
       - name: Load credit
         id: load
         continue-on-error: true
         run: dotnet run -c Release --no-build
         env:
-          TENBIS_STATE_PATH: ${{ runner.temp }}/tenbis-state.json
+          TENBIS_STATE_PATH: ${{ runner.temp }}/session/tenbis-state.json
+
+      - name: Save refreshed session
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/session
+          key: ${{ steps.session.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
 
       # Mentioning the owner in the log issue makes GitHub send an email.
       - name: Report result

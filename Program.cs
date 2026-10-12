@@ -144,6 +144,19 @@ try
     }
 
     Console.WriteLine("Login detected.");
+
+    /*
+     * 10bis replaces the session cookies when it refreshes them and
+     * invalidates the old ones, so the refreshed session must be saved
+     * for the next run. In GitHub Actions it is kept in the Actions cache.
+     */
+    await context.StorageStateAsync(
+        new BrowserContextStorageStateOptions
+        {
+            Path = statePath
+        });
+
+    Console.WriteLine("Refreshed session was saved.");
     Console.WriteLine("Opening side menu...");
 
     await sideMenuButton.ClickAsync();
