@@ -47,6 +47,55 @@ void WriteResult(string status, string message)
     Console.WriteLine(logLine);
 }
 
+/*
+ * Reads the "יתרה עדכנית" (current balance) from the "תן ביס קרדיט" card
+ * in the charges report. The balance is informational only, so any problem
+ * here returns null instead of failing the run.
+ */
+async Task<string?> ReadCreditBalanceAsync(IPage page, bool reload)
+{
+    try
+    {
+        if (reload)
+        {
+            await page.ReloadAsync(
+                new PageReloadOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = 60000
+                });
+        }
+
+        // The nearest ancestor of the label that also contains digits is the card.
+        var balanceCard = page.Locator(
+            "xpath=//*[normalize-space(text())='יתרה עדכנית']" +
+            "/ancestor::*[contains(translate(., '0123456789', '##########'), '#')][1]");
+
+        await balanceCard.First.WaitForAsync(
+            new LocatorWaitForOptions
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 30000
+            });
+
+        string cardText = await balanceCard.First.InnerTextAsync();
+
+        var match = System.Text.RegularExpressions.Regex.Match(
+            cardText,
+            @"\d[\d,]*(\.\d+)?");
+
+        return match.Success ? match.Value : null;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Could not read the credit balance: {ex.Message}");
+        return null;
+    }
+}
+
+string FormatBalance(string? balance) =>
+    balance is null ? "" : $" Credit balance: {balance}";
+
 try
 {
     if (!loginMode && !File.Exists(statePath))
@@ -206,9 +255,12 @@ try
         Console.WriteLine("Credit was already loaded today.");
         Console.WriteLine("No action is required.");
 
+        string? currentBalance = await ReadCreditBalanceAsync(page, reload: false);
+
         WriteResult(
             "SKIPPED",
-            "Credit was already loaded today. No action was required.");
+            "Credit was already loaded today. No action was required." +
+            FormatBalance(currentBalance));
 
         Environment.ExitCode = 0;
         return;
@@ -286,13 +338,14 @@ try
 
     Console.WriteLine("Credit loading completed successfully.");
 
+    // Reload so the charges report shows the balance after this load.
+    string? balance = await ReadCreditBalanceAsync(page, reload: true);
+
     WriteResult(
         "SUCCESS",
-        "Credit was loaded successfully.");
+        "Credit was loaded successfully." + FormatBalance(balance));
 
     Environment.ExitCode = 0;
-
-    await closeButton.ClickAsync();
 }
 catch (TimeoutException ex)
 {

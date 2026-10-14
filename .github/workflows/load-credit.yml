@@ -5,6 +5,11 @@ on:
   # through the workflow_dispatch API, because GitHub's own schedule never fired.
   # If credit was already loaded today, the run stops after a quick check.
   workflow_dispatch:
+    inputs:
+      force:
+        description: Run even if credit was already loaded today (for testing)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -57,7 +62,7 @@ jobs:
 
   load-credit:
     needs: check
-    if: needs.check.outputs.loaded != 'true'
+    if: needs.check.outputs.loaded != 'true' || inputs.force
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -128,7 +133,9 @@ jobs:
           ISSUE="${{ needs.check.outputs.issue }}"
 
           if grep -q "| SUCCESS" "$LOG" 2>/dev/null; then
-            gh issue comment "$ISSUE" --body "$OWNER ✅ נטען קרדיט ב-10bis — $NOW"
+            BALANCE=$(grep "| SUCCESS" "$LOG" | tail -1 | grep -o "Credit balance: [0-9.,]*" | cut -d' ' -f3)
+            gh issue comment "$ISSUE" --body "$OWNER ✅ נטען קרדיט ב-10bis — $NOW${BALANCE:+
+          יתרת קרדיט: ₪$BALANCE}"
           elif [ "${{ steps.load.outcome }}" = "failure" ]; then
             if [ "${{ needs.check.outputs.failed }}" = "true" ]; then
               echo "Failure was already reported today."
