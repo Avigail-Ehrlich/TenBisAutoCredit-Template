@@ -29,9 +29,13 @@ On this repository's page: **Use this template → Create a new repository** →
 
 > ⚠️ The repository must be private. Your credit log and workflow runs will be visible in it.
 
+The repository holds only the workflow. The program itself runs from the shared
+[TenBisAutoCredit-Core](https://github.com/Avigail-Ehrlich/TenBisAutoCredit-Core) repository (version `v1`).
+For the one-time login (next step), get a local copy of it:
+
 ```powershell
-git clone https://github.com/<USER>/<REPO>.git
-cd <REPO>
+git clone --branch v1 https://github.com/Avigail-Ehrlich/TenBisAutoCredit-Core.git
+cd TenBisAutoCredit-Core
 ```
 
 ### 2. Log in to 10bis and save the session
@@ -43,7 +47,7 @@ dotnet run -- --login
 ```
 
 A browser opens. Log in to 10bis (including the one-time code) until the home screen with the ☰ menu button appears.
-The session is saved to `playwright-auth/tenbis-state.json` and the browser closes by itself (5-minute limit).
+The session is saved to `playwright-auth/tenbis-state.json` (inside the `TenBisAutoCredit-Core` folder) and the browser closes by itself (5-minute limit).
 
 > ⚠️ This file is full access to your 10bis account. It is in `.gitignore` — **never commit it** and never send it to anyone.
 
@@ -59,7 +63,7 @@ dotnet run
 Get-Content playwright-auth\tenbis-state.json -Raw | gh secret set TENBIS_STATE --repo <USER>/<REPO>
 ```
 
-Or on the website: **Settings → Secrets and variables → Actions → New repository secret**,
+Run it from the `TenBisAutoCredit-Core` folder. Or on the website: **Settings → Secrets and variables → Actions → New repository secret**,
 name `TENBIS_STATE`, value — the entire contents of the file.
 
 ### 4. A token for triggering the workflow

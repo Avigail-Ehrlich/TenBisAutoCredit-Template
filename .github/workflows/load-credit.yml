@@ -67,17 +67,23 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      # The program lives in the shared Core repository. The version is pinned by
+      # the tag: change v1 only when you want to move to a newer version.
       - uses: actions/checkout@v5
+        with:
+          repository: Avigail-Ehrlich/TenBisAutoCredit-Core
+          ref: v1
+          path: core
 
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Build
-        run: dotnet build -c Release
+        run: dotnet build core -c Release
 
       - name: Install Chromium
-        run: pwsh bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+        run: pwsh core/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
 
       # 10bis invalidates the session cookies when it refreshes them, so every
       # run saves the refreshed session to the Actions cache for the next run.
@@ -113,7 +119,7 @@ jobs:
       - name: Load credit
         id: load
         continue-on-error: true
-        run: dotnet run -c Release --no-build
+        run: dotnet run --project core -c Release --no-build
         env:
           TENBIS_STATE_PATH: ${{ runner.temp }}/session/tenbis-state.json
 
@@ -122,7 +128,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: failure-screenshot
-          path: bin/Release/net10.0/failure.png
+          path: core/bin/Release/net10.0/failure.png
           if-no-files-found: ignore
           retention-days: 7
 
@@ -136,7 +142,7 @@ jobs:
       # Mentioning the owner in the log issue makes GitHub send an email.
       - name: Report result
         run: |
-          LOG=bin/Release/net10.0/TenBisAutoCredit.log
+          LOG=core/bin/Release/net10.0/TenBisAutoCredit.log
           NOW=$(TZ=Asia/Jerusalem date '+%d/%m/%Y %H:%M')
           OWNER="@${{ github.repository_owner }}"
           ISSUE="${{ needs.check.outputs.issue }}"
