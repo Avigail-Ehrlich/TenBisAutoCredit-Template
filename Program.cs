@@ -146,16 +146,6 @@ async Task SaveDiagnosticsAsync()
     }
 }
 
-/*
- * Used as an exception filter: it runs before the stack unwinds, while the
- * browser is still open (a catch block runs after it was disposed).
- */
-bool Diagnose()
-{
-    SaveDiagnosticsAsync().GetAwaiter().GetResult();
-    return true;
-}
-
 try
 {
     if (!loginMode && !File.Exists(statePath))
@@ -189,226 +179,235 @@ try
 
     var page = await context.NewPageAsync();
     currentPage = page;
-
-    await page.GotoAsync(
-        TenBisUrl,
-        new PageGotoOptions
-        {
-            WaitUntil = WaitUntilState.DOMContentLoaded,
-            Timeout = 60000
-        });
-
-    await page.WaitForTimeoutAsync(2000);
-
-    var sideMenuButton = page.Locator(
-        "[data-test-id=\"sideMenuBtn\"]");
-
-    if (loginMode)
+    try
     {
-        Console.WriteLine("Log in to 10bis in the opened browser (up to 5 minutes)...");
 
-        await sideMenuButton.WaitForAsync(
-            new LocatorWaitForOptions
+        await page.GotoAsync(
+            TenBisUrl,
+            new PageGotoOptions
             {
-                State = WaitForSelectorState.Visible,
-                Timeout = 5 * 60 * 1000
+                WaitUntil = WaitUntilState.DOMContentLoaded,
+                Timeout = 60000
             });
 
-        Directory.CreateDirectory(
-            Path.GetDirectoryName(Path.GetFullPath(statePath))!);
+        await page.WaitForTimeoutAsync(2000);
 
+        var sideMenuButton = page.Locator(
+            "[data-test-id=\"sideMenuBtn\"]");
+
+        if (loginMode)
+        {
+            Console.WriteLine("Log in to 10bis in the opened browser (up to 5 minutes)...");
+
+            await sideMenuButton.WaitForAsync(
+                new LocatorWaitForOptions
+                {
+                    State = WaitForSelectorState.Visible,
+                    Timeout = 5 * 60 * 1000
+                });
+
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(Path.GetFullPath(statePath))!);
+
+            await context.StorageStateAsync(
+                new BrowserContextStorageStateOptions
+                {
+                    Path = statePath
+                });
+
+            Console.WriteLine($"Session was saved to {Path.GetFullPath(statePath)}");
+            return;
+        }
+
+        /*
+         * Login is detected according to the side-menu button.
+         * In an automatic execution, the application must not wait
+         * for manual login or Console.ReadLine().
+         */
+        try
+        {
+            await sideMenuButton.WaitForAsync(
+                new LocatorWaitForOptions
+                {
+                    State = WaitForSelectorState.Visible,
+                    Timeout = 10000
+                });
+        }
+        catch (TimeoutException)
+        {
+            Console.WriteLine("Login was not detected.");
+
+            WriteResult(
+                "ERROR",
+                "Login was not detected. The saved 10bis session may have expired.");
+
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        Console.WriteLine("Login detected.");
+
+        /*
+         * 10bis replaces the session cookies when it refreshes them and
+         * invalidates the old ones, so the refreshed session must be saved
+         * for the next run. In GitHub Actions it is kept in the Actions cache.
+         */
         await context.StorageStateAsync(
             new BrowserContextStorageStateOptions
             {
                 Path = statePath
             });
 
-        Console.WriteLine($"Session was saved to {Path.GetFullPath(statePath)}");
-        return;
-    }
+        Console.WriteLine("Refreshed session was saved.");
+        Console.WriteLine("Opening side menu...");
 
-    /*
-     * Login is detected according to the side-menu button.
-     * In an automatic execution, the application must not wait
-     * for manual login or Console.ReadLine().
-     */
-    try
-    {
-        await sideMenuButton.WaitForAsync(
+        await sideMenuButton.ClickAsync();
+
+        var chargesReportLink = page.GetByRole(
+            AriaRole.Link,
+            new PageGetByRoleOptions
+            {
+                Name = "דו\"ח חיובים",
+                Exact = true
+            });
+
+        await chargesReportLink.WaitForAsync(
             new LocatorWaitForOptions
             {
                 State = WaitForSelectorState.Visible,
-                Timeout = 10000
+                Timeout = 30000
             });
-    }
-    catch (TimeoutException)
-    {
-        Console.WriteLine("Login was not detected.");
+
+        Console.WriteLine("Opening charges report...");
+
+        await chargesReportLink.ClickAsync();
+
+        await page.WaitForTimeoutAsync(2000);
+
+        var openCreditDialogButton = page.GetByRole(
+            AriaRole.Button,
+            new PageGetByRoleOptions
+            {
+                Name = "הטענת תן ביס קרדיט",
+                Exact = true
+            });
+
+        await openCreditDialogButton.WaitForAsync(
+            new LocatorWaitForOptions
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 30000
+            });
+
+        /*
+         * A disabled button means that credit was already loaded today.
+         * This is an expected result and not an error.
+         */
+        if (!await openCreditDialogButton.IsEnabledAsync())
+        {
+            Console.WriteLine("Credit was already loaded today.");
+            Console.WriteLine("No action is required.");
+
+            string? currentBalance = await ReadCreditBalanceAsync(page, reload: false);
+
+            WriteResult(
+                "SKIPPED",
+                "Credit was already loaded today. No action was required." +
+                FormatBalance(currentBalance));
+
+            Environment.ExitCode = 0;
+            return;
+        }
+
+        Console.WriteLine("Credit is available for loading.");
+        Console.WriteLine("Opening credit-loading dialog...");
+
+        await openCreditDialogButton.ClickAsync();
+
+        var continueButton = page.GetByRole(
+            AriaRole.Button,
+            new PageGetByRoleOptions
+            {
+                Name = "המשך",
+                Exact = true
+            });
+
+        await continueButton.WaitForAsync(
+            new LocatorWaitForOptions
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 30000
+            });
+
+        if (!await continueButton.IsEnabledAsync())
+        {
+            throw new InvalidOperationException(
+                "The Continue button was found but remained disabled.");
+        }
+
+        Console.WriteLine("Clicking Continue...");
+
+        await continueButton.ClickAsync();
+
+        var finalLoadButton = page.GetByRole(
+            AriaRole.Button,
+            new PageGetByRoleOptions
+            {
+                Name = "הטענת קרדיט",
+                Exact = true
+            });
+
+        await finalLoadButton.WaitForAsync(
+            new LocatorWaitForOptions
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 30000
+            });
+
+        if (!await finalLoadButton.IsEnabledAsync())
+        {
+            throw new InvalidOperationException(
+                "The final Load Credit button was found but remained disabled.");
+        }
+
+        Console.WriteLine("Loading credit...");
+
+        await finalLoadButton.ClickAsync();
+
+        var closeButton = page.GetByRole(
+            AriaRole.Button,
+            new PageGetByRoleOptions
+            {
+                Name = "סגירה",
+                Exact = true
+            });
+
+        await closeButton.WaitForAsync(
+            new LocatorWaitForOptions
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 30000
+            });
+
+        Console.WriteLine("Credit loading completed successfully.");
+
+        // Reload so the charges report shows the balance after this load.
+        string? balance = await ReadCreditBalanceAsync(page, reload: true);
 
         WriteResult(
-            "ERROR",
-            "Login was not detected. The saved 10bis session may have expired.");
-
-        Environment.ExitCode = 1;
-        return;
-    }
-
-    Console.WriteLine("Login detected.");
-
-    /*
-     * 10bis replaces the session cookies when it refreshes them and
-     * invalidates the old ones, so the refreshed session must be saved
-     * for the next run. In GitHub Actions it is kept in the Actions cache.
-     */
-    await context.StorageStateAsync(
-        new BrowserContextStorageStateOptions
-        {
-            Path = statePath
-        });
-
-    Console.WriteLine("Refreshed session was saved.");
-    Console.WriteLine("Opening side menu...");
-
-    await sideMenuButton.ClickAsync();
-
-    var chargesReportLink = page.GetByRole(
-        AriaRole.Link,
-        new PageGetByRoleOptions
-        {
-            Name = "דו\"ח חיובים",
-            Exact = true
-        });
-
-    await chargesReportLink.WaitForAsync(
-        new LocatorWaitForOptions
-        {
-            State = WaitForSelectorState.Visible,
-            Timeout = 30000
-        });
-
-    Console.WriteLine("Opening charges report...");
-
-    await chargesReportLink.ClickAsync();
-
-    await page.WaitForTimeoutAsync(2000);
-
-    var openCreditDialogButton = page.GetByRole(
-        AriaRole.Button,
-        new PageGetByRoleOptions
-        {
-            Name = "הטענת תן ביס קרדיט",
-            Exact = true
-        });
-
-    await openCreditDialogButton.WaitForAsync(
-        new LocatorWaitForOptions
-        {
-            State = WaitForSelectorState.Visible,
-            Timeout = 30000
-        });
-
-    /*
-     * A disabled button means that credit was already loaded today.
-     * This is an expected result and not an error.
-     */
-    if (!await openCreditDialogButton.IsEnabledAsync())
-    {
-        Console.WriteLine("Credit was already loaded today.");
-        Console.WriteLine("No action is required.");
-
-        string? currentBalance = await ReadCreditBalanceAsync(page, reload: false);
-
-        WriteResult(
-            "SKIPPED",
-            "Credit was already loaded today. No action was required." +
-            FormatBalance(currentBalance));
+            "SUCCESS",
+            "Credit was loaded successfully." + FormatBalance(balance));
 
         Environment.ExitCode = 0;
-        return;
     }
-
-    Console.WriteLine("Credit is available for loading.");
-    Console.WriteLine("Opening credit-loading dialog...");
-
-    await openCreditDialogButton.ClickAsync();
-
-    var continueButton = page.GetByRole(
-        AriaRole.Button,
-        new PageGetByRoleOptions
-        {
-            Name = "המשך",
-            Exact = true
-        });
-
-    await continueButton.WaitForAsync(
-        new LocatorWaitForOptions
-        {
-            State = WaitForSelectorState.Visible,
-            Timeout = 30000
-        });
-
-    if (!await continueButton.IsEnabledAsync())
+    catch
     {
-        throw new InvalidOperationException(
-            "The Continue button was found but remained disabled.");
+        // The browser is still open here, unlike in the outer catch blocks.
+        await SaveDiagnosticsAsync();
+        throw;
     }
-
-    Console.WriteLine("Clicking Continue...");
-
-    await continueButton.ClickAsync();
-
-    var finalLoadButton = page.GetByRole(
-        AriaRole.Button,
-        new PageGetByRoleOptions
-        {
-            Name = "הטענת קרדיט",
-            Exact = true
-        });
-
-    await finalLoadButton.WaitForAsync(
-        new LocatorWaitForOptions
-        {
-            State = WaitForSelectorState.Visible,
-            Timeout = 30000
-        });
-
-    if (!await finalLoadButton.IsEnabledAsync())
-    {
-        throw new InvalidOperationException(
-            "The final Load Credit button was found but remained disabled.");
-    }
-
-    Console.WriteLine("Loading credit...");
-
-    await finalLoadButton.ClickAsync();
-
-    var closeButton = page.GetByRole(
-        AriaRole.Button,
-        new PageGetByRoleOptions
-        {
-            Name = "סגירה",
-            Exact = true
-        });
-
-    await closeButton.WaitForAsync(
-        new LocatorWaitForOptions
-        {
-            State = WaitForSelectorState.Visible,
-            Timeout = 30000
-        });
-
-    Console.WriteLine("Credit loading completed successfully.");
-
-    // Reload so the charges report shows the balance after this load.
-    string? balance = await ReadCreditBalanceAsync(page, reload: true);
-
-    WriteResult(
-        "SUCCESS",
-        "Credit was loaded successfully." + FormatBalance(balance));
-
-    Environment.ExitCode = 0;
 }
-catch (TimeoutException ex) when (Diagnose())
+catch (TimeoutException ex)
 {
     WriteResult(
         "ERROR",
@@ -416,7 +415,7 @@ catch (TimeoutException ex) when (Diagnose())
 
     Environment.ExitCode = 1;
 }
-catch (PlaywrightException ex) when (Diagnose())
+catch (PlaywrightException ex)
 {
     WriteResult(
         "ERROR",
