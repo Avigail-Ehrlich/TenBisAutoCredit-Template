@@ -117,6 +117,15 @@ jobs:
         env:
           TENBIS_STATE_PATH: ${{ runner.temp }}/session/tenbis-state.json
 
+      - name: Upload failure screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-screenshot
+          path: bin/Release/net10.0/failure.png
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Save refreshed session
         if: always()
         uses: actions/cache/save@v4

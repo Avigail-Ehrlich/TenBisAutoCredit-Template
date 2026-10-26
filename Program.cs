@@ -96,6 +96,56 @@ async Task<string?> ReadCreditBalanceAsync(IPage page, bool reload)
 string FormatBalance(string? balance) =>
     balance is null ? "" : $" Credit balance: {balance}";
 
+IPage? currentPage = null;
+
+/*
+ * On a failure, saves a screenshot and prints the visible buttons and
+ * dialog text, so the log shows what 10bis displayed instead of the
+ * expected button. Never throws.
+ */
+async Task SaveDiagnosticsAsync()
+{
+    if (currentPage is null)
+    {
+        return;
+    }
+
+    try
+    {
+        Console.WriteLine($"Diagnostics - page URL: {currentPage.Url}");
+
+        await currentPage.ScreenshotAsync(
+            new PageScreenshotOptions
+            {
+                Path = Path.Combine(AppContext.BaseDirectory, "failure.png"),
+                FullPage = true
+            });
+
+        var buttons = await currentPage
+            .Locator("button:visible, [role=button]:visible")
+            .AllInnerTextsAsync();
+
+        Console.WriteLine(
+            "Diagnostics - visible buttons: " +
+            string.Join(" | ", buttons.Select(b => b.Replace("\n", " ").Trim())));
+
+        var dialogs = await currentPage
+            .Locator("[role=dialog]:visible, [role=alertdialog]:visible")
+            .AllInnerTextsAsync();
+
+        foreach (string dialog in dialogs)
+        {
+            Console.WriteLine(
+                "Diagnostics - dialog text: " +
+                dialog.Replace("\n", " ").Trim());
+        }
+    }
+    catch (Exception diagnosticsEx)
+    {
+        Console.WriteLine($"Could not save diagnostics: {diagnosticsEx.Message}");
+    }
+}
+
 try
 {
     if (!loginMode && !File.Exists(statePath))
@@ -128,6 +178,7 @@ try
         });
 
     var page = await context.NewPageAsync();
+    currentPage = page;
 
     await page.GotoAsync(
         TenBisUrl,
@@ -349,6 +400,8 @@ try
 }
 catch (TimeoutException ex)
 {
+    await SaveDiagnosticsAsync();
+
     WriteResult(
         "ERROR",
         $"Timeout while waiting for the 10bis website: {ex.Message}");
@@ -357,6 +410,8 @@ catch (TimeoutException ex)
 }
 catch (PlaywrightException ex)
 {
+    await SaveDiagnosticsAsync();
+
     WriteResult(
         "ERROR",
         $"Playwright error: {ex.Message}");
