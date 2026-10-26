@@ -146,6 +146,16 @@ async Task SaveDiagnosticsAsync()
     }
 }
 
+/*
+ * Used as an exception filter: it runs before the stack unwinds, while the
+ * browser is still open (a catch block runs after it was disposed).
+ */
+bool Diagnose()
+{
+    SaveDiagnosticsAsync().GetAwaiter().GetResult();
+    return true;
+}
+
 try
 {
     if (!loginMode && !File.Exists(statePath))
@@ -398,20 +408,16 @@ try
 
     Environment.ExitCode = 0;
 }
-catch (TimeoutException ex)
+catch (TimeoutException ex) when (Diagnose())
 {
-    await SaveDiagnosticsAsync();
-
     WriteResult(
         "ERROR",
         $"Timeout while waiting for the 10bis website: {ex.Message}");
 
     Environment.ExitCode = 1;
 }
-catch (PlaywrightException ex)
+catch (PlaywrightException ex) when (Diagnose())
 {
-    await SaveDiagnosticsAsync();
-
     WriteResult(
         "ERROR",
         $"Playwright error: {ex.Message}");
