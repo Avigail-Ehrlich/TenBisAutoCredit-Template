@@ -93,6 +93,51 @@ async Task<string?> ReadCreditBalanceAsync(IPage page, bool reload)
     }
 }
 
+/*
+ * 10bis sometimes shows a "how was your order" feedback modal that covers the
+ * page and blocks every click. Closes it without sending feedback.
+ */
+async Task DismissFeedbackModalAsync(IPage page)
+{
+    try
+    {
+        var feedbackModal = page
+            .Locator("[data-test-id=\"rootModal\"]")
+            .Filter(new LocatorFilterOptions { HasText = "שליחת משוב" });
+
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            if (!await feedbackModal.First.IsVisibleAsync())
+            {
+                return;
+            }
+
+            Console.WriteLine("Closing the feedback modal...");
+
+            await page.Keyboard.PressAsync("Escape");
+            await page.WaitForTimeoutAsync(1000);
+
+            if (!await feedbackModal.First.IsVisibleAsync())
+            {
+                return;
+            }
+
+            // Escape did not work: click the modal buttons that do not send feedback.
+            var closeButton = feedbackModal.First
+                .Locator("button")
+                .Filter(new LocatorFilterOptions { HasNotText = "שליחת משוב" })
+                .First;
+
+            await closeButton.ClickAsync(new LocatorClickOptions { Timeout = 5000 });
+            await page.WaitForTimeoutAsync(1000);
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Could not close the feedback modal: {ex.Message}");
+    }
+}
+
 string FormatBalance(string? balance) =>
     balance is null ? "" : $" Credit balance: {balance}";
 
@@ -261,6 +306,8 @@ try
         Console.WriteLine("Refreshed session was saved.");
         Console.WriteLine("Opening side menu...");
 
+        await DismissFeedbackModalAsync(page);
+
         await sideMenuButton.ClickAsync();
 
         var chargesReportLink = page.GetByRole(
@@ -321,6 +368,8 @@ try
 
         Console.WriteLine("Credit is available for loading.");
         Console.WriteLine("Opening credit-loading dialog...");
+
+        await DismissFeedbackModalAsync(page);
 
         await openCreditDialogButton.ClickAsync();
 
